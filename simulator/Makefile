@@ -120,7 +120,9 @@ $O/$(TARGET): $(OBJS)  $(wildcard $(EXTRA_OBJS)) Makefile $(CONFIGFILE)
 
 .PHONY: all clean cleanall depend msgheaders smheaders
 
-.SUFFIXES: .cpp
+# disabling all implicit rules
+.SUFFIXES :
+.PRECIOUS : %_m.h %_m.cpp
 
 $O/%.o: %.cpp $(COPTS_FILE) | msgheaders smheaders
 	@$(MKPATH) $(dir $@)

@@ -1,3 +1,4 @@
+#include <fstream>
 #include "globals.h"
 #include "crypto.h"
 #include "baseMessage_m.h"
@@ -414,6 +415,11 @@ void FullNode::invoiceHandler (BaseMessage *baseMsg) {
    if (!hasCapacityToForward(firstHop, value)) {
        _myPayments[paymentHash] = "CANCELED";
        EV << "WARNING: Canceling payment " + paymentHash + " on node " + myName + " due to insufficient funds in the first hop.\n";
+
+        std::ofstream outFile;
+        outFile.open("payment_result.txt", std::ios::app);
+        outFile << value << " FAILED" << std::endl;
+        outFile.close();
 
        _countCanceled++;
        _paymentGoodputAll = double(_countCompleted)/double(_countCompleted + _countFailed + _countCanceled);
@@ -1170,6 +1176,11 @@ void FullNode::commitUpdateFulfillHTLC (HTLC *htlc, std::string neighbor) {
             bubble("Payment completed!");
             EV << "Payment " + paymentHash + " completed!\n";
 
+            std::ofstream outFile;
+            outFile.open("payment_result.txt", std::ios::app);
+            outFile << value << " COMPLETED" << std::endl;
+            outFile.close();
+            
             _myPayments[paymentHash] = "COMPLETED";
             _countCompleted++;
             _paymentGoodputSent = double(_countCompleted)/double(_countCompleted + _countFailed);
@@ -1215,6 +1226,11 @@ void FullNode::commitUpdateFailHTLC (HTLC *htlc, std::string neighbor) {
             bubble("Payment failed!");
             EV << "Payment " + paymentHash + " failed!\n";
             _myPayments[paymentHash] = "FAILED";
+
+            std::ofstream outFile;
+            outFile.open("payment_result.txt", std::ios::app);
+            outFile << value << " FAILED" << std::endl;
+            outFile.close();
 
             _countFailed++;
             _paymentGoodputSent = double(_countCompleted)/double(_countCompleted + _countFailed);
