@@ -1,6 +1,7 @@
 import click
 from functions import *
 from graphs import *
+from process_barabasi import *
 from datasets.statistics import *
 
 @click.group(chain=True, invoke_without_command=True)
@@ -8,7 +9,7 @@ def cli():
     pass
 
 @cli.command(name='genTopo', help='Generates a topology for the simulation')
-@click.option('-t','--topology', default='scale-free', type=click.Choice (['scale-free','barabasi-albert','watts-strogatz'], case_sensitive=False), help='Topology used in the simulation')
+@click.option('-t','--topology', default='barabasi-albert', type=click.Choice (['scale-free','barabasi-albert','watts-strogatz'], case_sensitive=False), help='Topology used in the simulation')
 @click.option('-n','--nodes', type=int, default=10, help='Number of nodes in the topology')
 @click.option('--alpha', default=0.5, help='Alpha parameter for scale-free topology')
 @click.option('--beta', default=0.00001, help='Beta parameter for scale-free topology')
@@ -39,6 +40,7 @@ def generate_topology (topology, nodes, alpha, beta, gamma, k, p, m, lightning):
 
     graph = adjust_edges(graph)
     initialize_attributes(graph, lightning, True if topology == 'scale-free' else False)
+    if (topology == 'barabasi-albert'): process_barab()
 
 @cli.command(name='genWork', help='Generates a payment workload for the simulation')
 @click.option('--n_payments', default=1, help='Number of payments in th network simulation')

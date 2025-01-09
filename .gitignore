@@ -9,3 +9,4 @@ simulator/core
 simulator/General*
 bkp-config/
 .metadata/
+topologies/topology
