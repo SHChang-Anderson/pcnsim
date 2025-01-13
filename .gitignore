@@ -10,3 +10,4 @@ simulator/General*
 bkp-config/
 .metadata/
 topologies/topology
+routing_table/
