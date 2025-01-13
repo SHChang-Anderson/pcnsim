@@ -1,4 +1,9 @@
 #include <fstream>
+#include <sstream>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <regex>
 #include "globals.h"
 #include "crypto.h"
 #include "baseMessage_m.h"
@@ -30,6 +35,7 @@ class FullNode : public cSimpleModule {
         virtual std::vector<std::string> getPath(std::map<std::string, std::string> parents, std::string target);
         virtual std::string minDistanceNode (std::map<std::string, double> distances, std::map<std::string, bool> visited);
         virtual std::vector<std::string> dijkstraWeightedShortestPath (std::string src, std::string target, std::map<std::string, std::vector<std::pair<std::string, std::vector<double> > > > graph);
+        virtual std::vector<std::string> getpathFromTable(std::string input_source, std::string input_destination, double value);
 
         // Message handlers
         virtual void initHandler (BaseMessage *baseMsg);
@@ -66,6 +72,18 @@ class FullNode : public cSimpleModule {
         virtual std::string createHTLCId (std::string paymentHash, int htlcType);
 
     public:
+        // Path data structure definition
+        typedef struct {
+            std::vector<std::string> path;
+            float flow;
+            float fee;
+        } PathData;
+
+        // Comparison function to sort paths by flow in descending order
+        static bool compareByFlow(const PathData& a, const PathData& b);
+        // Comparison function to sort paths by fee in ascending order
+        static bool compareByFee(const PathData& a, const PathData& b);
+
         // Public data structures
         bool _isFirstSelfMessage;
         cTopology *_localTopology;
@@ -273,6 +291,16 @@ void FullNode::finish() {
 /* ROUTING FUNCTIONS                                                                                                   */
 /***********************************************************************************************************************/
 
+// Comparison function to sort paths by flow in descending order
+bool FullNode::compareByFlow(const PathData& a, const PathData& b) {
+    return a.flow > b.flow; // Sort in descending order based on flow
+}
+
+// Comparison function to sort paths by fee in ascending order
+bool FullNode::compareByFee(const PathData& a, const PathData& b) {
+    return a.fee < b.fee; // Sort in ascending order based on fee
+}
+
 std::string FullNode::minDistanceNode (std::map<std::string, double> distances, std::map<std::string, bool> visited) {
     // Selects the node with minimum distance out of a distances list while disregarding visited nodes
 
@@ -363,6 +391,70 @@ std::vector<std::string> FullNode::dijkstraWeightedShortestPath (std::string src
     return getPath(parents, target);
 }
 
+std::vector<std::string> FullNode::getpathFromTable(std::string input_source, std::string input_destination, double value) {
+    // Container to store all paths
+    std::vector<FullNode::PathData> paths;
+
+    std::string line;
+    std::string current_source;
+
+    std::ifstream infile("../routing_table/" + input_source);
+    std::vector<std::vector<std::string>> pathss;
+
+    while (std::getline(infile, line)) {
+        // If the line indicates the beginning of a new path set, extract the source and destination
+        bool finish = 0;
+        if (line == "Paths from " + input_source +  " to " + input_destination + ":") {
+            finish = true;
+            while (std::getline(infile, line) && line.find("Paths from") == std::string::npos) {
+                FullNode::PathData tp;
+
+                // Extract node names using regular expression
+                std::regex re("node\\d+");
+                std::smatch match;
+
+                // Find all matches in the line
+                auto it = line.cbegin();
+                while (std::regex_search(it, line.cend(), match, re)) {
+                    tp.path.push_back(match.str());
+                    it = match[0].second;
+                }
+
+                // Extract flow and fee values using regular expressions
+                std::regex flow_re("Flow: ([0-9.]+)");
+                std::regex fee_re("Fee: ([0-9.]+)");
+
+                std::smatch flow_match, fee_match;
+
+                if (std::regex_search(line, flow_match, flow_re)) {
+                    tp.flow = std::stod(flow_match[1].str());
+                }
+                if (std::regex_search(line, fee_match, fee_re)) {
+                    tp.fee = std::stod(fee_match[1].str());
+                }
+                paths.push_back(tp);
+            }
+        }
+        if (finish)
+            break;
+    }
+
+    infile.close();
+
+    // Sort paths by flow in descending order
+    std::sort(paths.begin(), paths.end(), FullNode::compareByFlow);
+
+    std::vector<FullNode::PathData> avaliablepath;
+
+    for (int i = 0; i < paths.size(); i++) {
+        if (paths[i].flow < value)
+            break;
+        avaliablepath.push_back(paths[i]);
+    }
+
+    std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
+    return paths[0].path;
+}
 
 /***********************************************************************************************************************/
 /* MESSAGE HANDLERS                                                                                                    */
@@ -408,7 +500,8 @@ void FullNode::invoiceHandler (BaseMessage *baseMsg) {
     double value = invMsg->getValue();
 
     // Find route to destination
-    std::vector<std::string> path = this->dijkstraWeightedShortestPath(myName, dstName, adjMatrix);
+    // std::vector<std::string> path = this->dijkstraWeightedShortestPath(myName, dstName, adjMatrix);
+    std::vector<std::string> path = this->getpathFromTable(myName, dstName, value); // using the routing table path
     std::string firstHop = path[1];
 
     // If payment is larger than our capacity in the outbound payment channel, mark is as canceled and return
