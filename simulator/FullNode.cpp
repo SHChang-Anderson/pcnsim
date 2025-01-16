@@ -111,6 +111,28 @@ Define_Module(FullNode);
 
 void FullNode::initialize() {
 
+    const std::string filename = "results/payment_result.txt";
+
+    // Check if the result file exists and delete it if it does
+    std::ifstream fileCheck(filename);
+    if (fileCheck.good()) {
+        fileCheck.close();
+        if (std::remove(filename.c_str()) != 0) {
+            EV << "Error deleting existing file: " << filename << std::endl;
+        }
+    }
+
+    const std::string filename1 = "results/no_path.txt";
+
+    // Check if the result file exists and delete it if it does
+    std::ifstream fileCheck1(filename1);
+    if (fileCheck1.good()) {
+        fileCheck1.close();
+        if (std::remove(filename1.c_str()) != 0) {
+            EV << "Error deleting existing file: " << filename1 << std::endl;
+        }
+    }
+
     // Get name (id) and initialize local topology based on the global topology created by netBuilder
     _localTopology = globalTopology;
     this->localCommitCounter = 0;
@@ -451,7 +473,12 @@ std::vector<std::string> FullNode::getpathFromTable(std::string input_source, st
             break;
         avaliablepath.push_back(paths[i]);
     }
-
+    if (avaliablepath.size() <= 0) {
+        std::ofstream outFile;
+        outFile.open("results/no_path.txt", std::ios::app);
+        outFile << " no path" << std::endl;
+        outFile.close();
+    }
     std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
     return paths[0].path;
 }
@@ -510,7 +537,7 @@ void FullNode::invoiceHandler (BaseMessage *baseMsg) {
        EV << "WARNING: Canceling payment " + paymentHash + " on node " + myName + " due to insufficient funds in the first hop.\n";
 
         std::ofstream outFile;
-        outFile.open("payment_result.txt", std::ios::app);
+        outFile.open("results/payment_result.txt", std::ios::app);
         outFile << value << " FAILED" << std::endl;
         outFile.close();
 
@@ -1270,7 +1297,7 @@ void FullNode::commitUpdateFulfillHTLC (HTLC *htlc, std::string neighbor) {
             EV << "Payment " + paymentHash + " completed!\n";
 
             std::ofstream outFile;
-            outFile.open("payment_result.txt", std::ios::app);
+            outFile.open("results/payment_result.txt", std::ios::app);
             outFile << value << " COMPLETED" << std::endl;
             outFile.close();
             
@@ -1321,7 +1348,7 @@ void FullNode::commitUpdateFailHTLC (HTLC *htlc, std::string neighbor) {
             _myPayments[paymentHash] = "FAILED";
 
             std::ofstream outFile;
-            outFile.open("payment_result.txt", std::ios::app);
+            outFile.open("results/payment_result.txt", std::ios::app);
             outFile << value << " FAILED" << std::endl;
             outFile.close();
 
