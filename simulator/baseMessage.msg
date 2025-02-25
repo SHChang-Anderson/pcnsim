@@ -18,6 +18,7 @@ packet BaseMessage {
     int messageType;
     int hopCount;
     stringVector hops;
+    double minCapacity;
     //bool upstreamDirection;
      string displayString = "b=0,0,rect,o=white,white,0	";
 }

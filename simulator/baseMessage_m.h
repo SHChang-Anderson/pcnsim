@@ -37,6 +37,7 @@ class BaseMessage;
  *     int messageType;
  *     int hopCount;
  *     stringVector hops;
+ *     double minCapacity;
  *     //bool upstreamDirection;
  *     string displayString = "b=0,0,rect,o=white,white,0	";
  * }
@@ -49,6 +50,7 @@ class BaseMessage : public ::omnetpp::cPacket
     int messageType = 0;
     int hopCount = 0;
     stringVector hops;
+    double minCapacity = 0;
     omnetpp::opp_string displayString = "b=0,0,rect,o=white,white,0	";
 
   private:
@@ -78,6 +80,9 @@ class BaseMessage : public ::omnetpp::cPacket
     virtual const stringVector& getHops() const;
     virtual stringVector& getHopsForUpdate() { return const_cast<stringVector&>(const_cast<BaseMessage*>(this)->getHops());}
     virtual void setHops(const stringVector& hops);
+
+    virtual double getMinCapacity() const;
+    virtual void setMinCapacity(double minCapacity);
 
     virtual const char * getDisplayString() const;
     virtual void setDisplayString(const char * displayString);

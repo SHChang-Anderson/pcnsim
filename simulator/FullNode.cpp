@@ -46,6 +46,7 @@ class FullNode : public cSimpleModule {
         virtual void paymentRefusedHandler (BaseMessage *baseMsg);
         virtual void commitSignedHandler (BaseMessage *baseMsg);
         virtual void revokeAndAckHandler (BaseMessage *baseMsg);
+        virtual void capacityCheckHandler (BaseMessage *baseMsg);
 
         // HTLC senders
         virtual void sendFirstFulfillHTLC (HTLC *htlc, std::string firstHop);
@@ -262,6 +263,10 @@ void FullNode::handleMessage(cMessage *msg) {
             revokeAndAckHandler(baseMsg);
             break;
         }
+        case 135: {
+            capacityCheckHandler(baseMsg);
+            break;
+        }
     }
 }
 
@@ -314,12 +319,12 @@ void FullNode::finish() {
 /***********************************************************************************************************************/
 
 // Comparison function to sort paths by flow in descending order
-bool FullNode::compareByFlow(const PathData& a, const PathData& b) {
+bool FullNode::compareByFlow (const PathData& a, const PathData& b) {
     return a.flow > b.flow; // Sort in descending order based on flow
 }
 
 // Comparison function to sort paths by fee in ascending order
-bool FullNode::compareByFee(const PathData& a, const PathData& b) {
+bool FullNode::compareByFee (const PathData& a, const PathData& b) {
     return a.fee < b.fee; // Sort in ascending order based on fee
 }
 
@@ -473,6 +478,74 @@ std::vector<std::string> FullNode::getpathFromTable(std::string input_source, st
             break;
         avaliablepath.push_back(paths[i]);
     }
+
+    // ------------------------- probing func. ---------------------------------------------
+    EV << "Creating probing msg \n";
+
+    if (paths.size() < 2) {
+        EV << "Error: paths vector has less than 2 elements!" << endl;
+        if (avaliablepath.size() <= 0) {
+            std::ofstream outFile;
+            outFile.open("results/no_path.txt", std::ios::app);
+            outFile << " no path" << std::endl;
+            outFile.close();
+        }
+        std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
+        return paths[0].path;
+    }
+
+    if (paths[0].path.empty() || paths[1].path.size() < 2) {
+        EV << "Error: paths[0] or paths[1] does not have enough elements!" << endl;
+        if (avaliablepath.size() <= 0) {
+            std::ofstream outFile;
+            outFile.open("results/no_path.txt", std::ios::app);
+            outFile << " no path" << std::endl;
+            outFile.close();
+        }
+        std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
+        return paths[0].path;
+    }
+
+    std::string nextHop = paths[1].path[1];
+
+    if (_paymentChannels.find(nextHop) == _paymentChannels.end()) {
+        EV << "Error: No payment channel found for " << nextHop << endl;
+        if (avaliablepath.size() <= 0) {
+            std::ofstream outFile;
+            outFile.open("results/no_path.txt", std::ios::app);
+            outFile << " no path" << std::endl;
+            outFile.close();
+        }
+        std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
+        return paths[0].path;
+    }
+
+    cGate *gate = _paymentChannels[nextHop].getLocalGate();
+    if (!gate) {
+        EV << "Error: Gate for " << nextHop << " is null!" << endl;
+        if (avaliablepath.size() <= 0) {
+            std::ofstream outFile;
+            outFile.open("results/no_path.txt", std::ios::app);
+            outFile << " no path" << std::endl;
+            outFile.close();
+        }
+        std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
+        return paths[0].path;
+    }
+
+    BaseMessage *newMessage = new BaseMessage();
+    newMessage->setDestination(input_destination.c_str());
+    newMessage->setMessageType(135);
+    newMessage->setHopCount(1);
+    newMessage->setHops(paths[0].path);
+    newMessage->setName("CAPACITY_CHECK");
+    newMessage->setMinCapacity(_paymentChannels[nextHop].getCapacity());
+
+    EV << "Sending message to " << nextHop << " for probing \n";
+    send(newMessage, gate);
+
+    // ------------------------- probing func. ---------------------------------------------
+        
     if (avaliablepath.size() <= 0) {
         std::ofstream outFile;
         outFile.open("results/no_path.txt", std::ios::app);
@@ -589,6 +662,99 @@ void FullNode::invoiceHandler (BaseMessage *baseMsg) {
     send(newMessage, gate);
 
 }
+
+// ------------------------------ capacityCheckHandler -----------------------------------------
+void FullNode::capacityCheckHandler (BaseMessage *baseMsg) {
+    EV << "CAPACITY_CHECK received at " + std::string(getName()) + " from " + std::string(baseMsg->getSenderModule()->getName()) + ".\n";
+    std::string myName = getName();
+
+    if (!baseMsg->isSelfMessage()) {
+        std::string dstName = baseMsg->getDestination();
+        std::vector<std::string> path = baseMsg->getHops();
+        std::string sender = baseMsg->getSenderModule()->getName();
+
+        if (dstName == this->getName()) {
+            EV << "Payment reached its destination. Not forwarding.\n";
+            EV << "Cap" << baseMsg->getMinCapacity() << "\n";
+
+            // 開啟檔案以追加方式寫入
+            std::ofstream outFile("capacity_log.txt", std::ios::app);
+            if (outFile.is_open()) {
+                outFile << "Destination: " << dstName << "\n";
+                outFile << "Hops: ";
+                for (const auto& hop : baseMsg->getHops()) {
+                    outFile << hop << " ";
+                }
+                outFile << "\nMin Capacity: " << baseMsg->getMinCapacity() << "\n";
+                outFile << "-----------------------------\n";
+                outFile.close();
+            } else {
+                EV << "Error: Unable to open file for logging.\n";
+            }
+
+            if (!tryCommitTxOrFail(sender, false)) {
+                EV << "Setting timeout for node " + myName + "\n";
+                scheduleAt((simTime() + SimTime(500, SIMTIME_MS)), baseMsg);
+            }
+            return;
+        }
+
+        int nextHopIndex = baseMsg->getHopCount() + 1;
+        if (nextHopIndex >= path.size()) {
+            EV << "Error: nextHopIndex " << nextHopIndex << " out of bounds.\n";
+            return;
+        }
+
+        std::string nextHop = path[nextHopIndex];
+
+        if (_paymentChannels.find(nextHop) == _paymentChannels.end()) {
+            EV << "Error: Next hop " << nextHop << " not found in payment channels.\n";
+            return;
+        }
+
+        cGate *gate = _paymentChannels[nextHop].getLocalGate();
+        if (!gate) {
+            EV << "Error: Gate is nullptr for node " << myName << ". Message not sent.\n";
+            return;
+        }
+
+        EV << "Forward CAPACITY check \n";
+        BaseMessage *newMessage = new BaseMessage();
+        newMessage->setDestination(baseMsg->getDestination());
+        newMessage->setMessageType(135);
+        newMessage->setHopCount(baseMsg->getHopCount() + 1);
+        newMessage->setHops(baseMsg->getHops());
+        newMessage->setName("CAPACITY_CHECK");
+        newMessage->setMinCapacity(std::min(baseMsg->getMinCapacity(), _paymentChannels[nextHop].getCapacity()));
+
+        int hopIndex = newMessage->getHopCount();
+        if (hopIndex >= path.size()) {
+            EV << "Error: Hop index " << hopIndex << " out of bounds for path.\n";
+            delete newMessage;
+            return;
+        }
+
+        EV << "Sending message to " + path[hopIndex] + " for probing \n";
+        send(newMessage, gate);
+
+        if (!tryCommitTxOrFail(sender, false)) {
+            EV << "Setting timeout for node " + myName + ".\n";
+            scheduleAt((simTime() + SimTime(500, SIMTIME_MS)), baseMsg);
+        }
+
+    } else {
+        EV << myName + " timeout expired. Creating commit.\n";
+        std::vector<std::string> path = baseMsg->getHops();
+        int prevHopIndex = baseMsg->getHopCount() - 1;
+        if (prevHopIndex < 0) {
+            EV << "Error: prevHopIndex is negative.\n";
+            return;
+        }
+        std::string previousHop = path[prevHopIndex];
+        tryCommitTxOrFail(previousHop, true);
+    }
+}
+// ------------------------------ capacityCheckHandler -----------------------------------------
 
 void FullNode::updateAddHTLCHandler (BaseMessage *baseMsg) {
 

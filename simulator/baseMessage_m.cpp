@@ -464,6 +464,7 @@ void BaseMessage::copy(const BaseMessage& other)
     this->messageType = other.messageType;
     this->hopCount = other.hopCount;
     this->hops = other.hops;
+    this->minCapacity = other.minCapacity;
     this->displayString = other.displayString;
 }
 
@@ -474,6 +475,7 @@ void BaseMessage::parsimPack(omnetpp::cCommBuffer *b) const
     doParsimPacking(b,this->messageType);
     doParsimPacking(b,this->hopCount);
     doParsimPacking(b,this->hops);
+    doParsimPacking(b,this->minCapacity);
     doParsimPacking(b,this->displayString);
 }
 
@@ -484,6 +486,7 @@ void BaseMessage::parsimUnpack(omnetpp::cCommBuffer *b)
     doParsimUnpacking(b,this->messageType);
     doParsimUnpacking(b,this->hopCount);
     doParsimUnpacking(b,this->hops);
+    doParsimUnpacking(b,this->minCapacity);
     doParsimUnpacking(b,this->displayString);
 }
 
@@ -527,6 +530,16 @@ void BaseMessage::setHops(const stringVector& hops)
     this->hops = hops;
 }
 
+double BaseMessage::getMinCapacity() const
+{
+    return this->minCapacity;
+}
+
+void BaseMessage::setMinCapacity(double minCapacity)
+{
+    this->minCapacity = minCapacity;
+}
+
 const char * BaseMessage::getDisplayString() const
 {
     return this->displayString.c_str();
@@ -546,6 +559,7 @@ class BaseMessageDescriptor : public omnetpp::cClassDescriptor
         FIELD_messageType,
         FIELD_hopCount,
         FIELD_hops,
+        FIELD_minCapacity,
         FIELD_displayString,
     };
   public:
@@ -613,7 +627,7 @@ const char *BaseMessageDescriptor::getProperty(const char *propertyName) const
 int BaseMessageDescriptor::getFieldCount() const
 {
     omnetpp::cClassDescriptor *base = getBaseClassDescriptor();
-    return base ? 5+base->getFieldCount() : 5;
+    return base ? 6+base->getFieldCount() : 6;
 }
 
 unsigned int BaseMessageDescriptor::getFieldTypeFlags(int field) const
@@ -629,9 +643,10 @@ unsigned int BaseMessageDescriptor::getFieldTypeFlags(int field) const
         FD_ISEDITABLE,    // FIELD_messageType
         FD_ISEDITABLE,    // FIELD_hopCount
         FD_ISCOMPOUND,    // FIELD_hops
+        FD_ISEDITABLE,    // FIELD_minCapacity
         FD_ISEDITABLE,    // FIELD_displayString
     };
-    return (field >= 0 && field < 5) ? fieldTypeFlags[field] : 0;
+    return (field >= 0 && field < 6) ? fieldTypeFlags[field] : 0;
 }
 
 const char *BaseMessageDescriptor::getFieldName(int field) const
@@ -647,9 +662,10 @@ const char *BaseMessageDescriptor::getFieldName(int field) const
         "messageType",
         "hopCount",
         "hops",
+        "minCapacity",
         "displayString",
     };
-    return (field >= 0 && field < 5) ? fieldNames[field] : nullptr;
+    return (field >= 0 && field < 6) ? fieldNames[field] : nullptr;
 }
 
 int BaseMessageDescriptor::findField(const char *fieldName) const
@@ -660,7 +676,8 @@ int BaseMessageDescriptor::findField(const char *fieldName) const
     if (strcmp(fieldName, "messageType") == 0) return baseIndex + 1;
     if (strcmp(fieldName, "hopCount") == 0) return baseIndex + 2;
     if (strcmp(fieldName, "hops") == 0) return baseIndex + 3;
-    if (strcmp(fieldName, "displayString") == 0) return baseIndex + 4;
+    if (strcmp(fieldName, "minCapacity") == 0) return baseIndex + 4;
+    if (strcmp(fieldName, "displayString") == 0) return baseIndex + 5;
     return base ? base->findField(fieldName) : -1;
 }
 
@@ -677,9 +694,10 @@ const char *BaseMessageDescriptor::getFieldTypeString(int field) const
         "int",    // FIELD_messageType
         "int",    // FIELD_hopCount
         "stringVector",    // FIELD_hops
+        "double",    // FIELD_minCapacity
         "string",    // FIELD_displayString
     };
-    return (field >= 0 && field < 5) ? fieldTypeStrings[field] : nullptr;
+    return (field >= 0 && field < 6) ? fieldTypeStrings[field] : nullptr;
 }
 
 const char **BaseMessageDescriptor::getFieldPropertyNames(int field) const
@@ -766,6 +784,7 @@ std::string BaseMessageDescriptor::getFieldValueAsString(omnetpp::any_ptr object
         case FIELD_messageType: return long2string(pp->getMessageType());
         case FIELD_hopCount: return long2string(pp->getHopCount());
         case FIELD_hops: return "";
+        case FIELD_minCapacity: return double2string(pp->getMinCapacity());
         case FIELD_displayString: return oppstring2string(pp->getDisplayString());
         default: return "";
     }
@@ -786,6 +805,7 @@ void BaseMessageDescriptor::setFieldValueAsString(omnetpp::any_ptr object, int f
         case FIELD_destination: pp->setDestination((value)); break;
         case FIELD_messageType: pp->setMessageType(string2long(value)); break;
         case FIELD_hopCount: pp->setHopCount(string2long(value)); break;
+        case FIELD_minCapacity: pp->setMinCapacity(string2double(value)); break;
         case FIELD_displayString: pp->setDisplayString((value)); break;
         default: throw omnetpp::cRuntimeError("Cannot set field %d of class 'BaseMessage'", field);
     }
@@ -805,6 +825,7 @@ omnetpp::cValue BaseMessageDescriptor::getFieldValue(omnetpp::any_ptr object, in
         case FIELD_messageType: return pp->getMessageType();
         case FIELD_hopCount: return pp->getHopCount();
         case FIELD_hops: return omnetpp::toAnyPtr(&pp->getHops()); break;
+        case FIELD_minCapacity: return pp->getMinCapacity();
         case FIELD_displayString: return pp->getDisplayString();
         default: throw omnetpp::cRuntimeError("Cannot return field %d of class 'BaseMessage' as cValue -- field index out of range?", field);
     }
@@ -825,6 +846,7 @@ void BaseMessageDescriptor::setFieldValue(omnetpp::any_ptr object, int field, in
         case FIELD_destination: pp->setDestination(value.stringValue()); break;
         case FIELD_messageType: pp->setMessageType(omnetpp::checked_int_cast<int>(value.intValue())); break;
         case FIELD_hopCount: pp->setHopCount(omnetpp::checked_int_cast<int>(value.intValue())); break;
+        case FIELD_minCapacity: pp->setMinCapacity(value.doubleValue()); break;
         case FIELD_displayString: pp->setDisplayString(value.stringValue()); break;
         default: throw omnetpp::cRuntimeError("Cannot set field %d of class 'BaseMessage'", field);
     }
