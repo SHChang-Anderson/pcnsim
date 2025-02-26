@@ -480,80 +480,71 @@ std::vector<std::string> FullNode::getpathFromTable(std::string input_source, st
     }
 
     // ------------------------- probing func. ---------------------------------------------
-    EV << "Creating probing msg \n";
+    EV << "Creating probing msg for all available paths \n";
 
-    if (paths.size() < 2) {
-        EV << "Error: paths vector has less than 2 elements!" << endl;
-        if (avaliablepath.size() <= 0) {
-            std::ofstream outFile;
-            outFile.open("results/no_path.txt", std::ios::app);
-            outFile << " no path" << std::endl;
-            outFile.close();
-        }
-        std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
-        return paths[0].path;
+    // Check if there are any available paths
+    if (avaliablepath.empty()) {
+        EV << "No available paths with sufficient flow!" << endl;
+        std::ofstream outFile;
+        outFile.open("results/no_path.txt", std::ios::app);
+        outFile << " no path" << std::endl;
+        outFile.close();
+        return paths[0].path; // If no available paths, return the first path (based on original logic)
     }
 
-    if (paths[0].path.empty() || paths[1].path.size() < 2) {
-        EV << "Error: paths[0] or paths[1] does not have enough elements!" << endl;
-        if (avaliablepath.size() <= 0) {
-            std::ofstream outFile;
-            outFile.open("results/no_path.txt", std::ios::app);
-            outFile << " no path" << std::endl;
-            outFile.close();
+    // Send probing messages for all available paths
+    for (const auto& pathData : avaliablepath) {
+        const std::vector<std::string>& path = pathData.path;
+
+        // Check if the path is valid
+        if (path.size() < 2) {
+            EV << "Error: Path does not have enough elements!" << endl;
+            continue; // Skip this path
         }
-        std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
-        return paths[0].path;
-    }
 
-    std::string nextHop = paths[1].path[1];
+        std::string nextHop = path[1]; // First hop
 
-    if (_paymentChannels.find(nextHop) == _paymentChannels.end()) {
-        EV << "Error: No payment channel found for " << nextHop << endl;
-        if (avaliablepath.size() <= 0) {
-            std::ofstream outFile;
-            outFile.open("results/no_path.txt", std::ios::app);
-            outFile << " no path" << std::endl;
-            outFile.close();
+        // Check if the payment channel exists
+        if (_paymentChannels.find(nextHop) == _paymentChannels.end()) {
+            EV << "Error: No payment channel found for " << nextHop << endl;
+            continue; // Skip this path
         }
-        std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
-        return paths[0].path;
-    }
 
-    cGate *gate = _paymentChannels[nextHop].getLocalGate();
-    if (!gate) {
-        EV << "Error: Gate for " << nextHop << " is null!" << endl;
-        if (avaliablepath.size() <= 0) {
-            std::ofstream outFile;
-            outFile.open("results/no_path.txt", std::ios::app);
-            outFile << " no path" << std::endl;
-            outFile.close();
+        cGate *gate = _paymentChannels[nextHop].getLocalGate();
+        if (!gate) {
+            EV << "Error: Gate for " << nextHop << " is null!" << endl;
+            continue; // Skip this path
         }
-        std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
-        return paths[0].path;
+
+        // Create probing message
+        BaseMessage *newMessage = new BaseMessage();
+        newMessage->setDestination(input_destination.c_str());
+        newMessage->setMessageType(135); // CAPACITY_CHECK
+        newMessage->setHopCount(1);
+        newMessage->setHops(path); // Set the full path
+        newMessage->setName("CAPACITY_CHECK");
+        newMessage->setMinCapacity(pathData.flow); // Use the path's flow as the minimum capacity
+
+        // Log and send the message
+        EV << "Sending probing message to " << nextHop << " for path: ";
+        for (const auto& hop : path) {
+            EV << hop << " ";
+        }
+        EV << "\n";
+        send(newMessage, gate);
     }
-
-    BaseMessage *newMessage = new BaseMessage();
-    newMessage->setDestination(input_destination.c_str());
-    newMessage->setMessageType(135);
-    newMessage->setHopCount(1);
-    newMessage->setHops(paths[0].path);
-    newMessage->setName("CAPACITY_CHECK");
-    newMessage->setMinCapacity(_paymentChannels[nextHop].getCapacity());
-
-    EV << "Sending message to " << nextHop << " for probing \n";
-    send(newMessage, gate);
-
-    // ------------------------- probing func. ---------------------------------------------
-        
+    
     if (avaliablepath.size() <= 0) {
         std::ofstream outFile;
         outFile.open("results/no_path.txt", std::ios::app);
         outFile << " no path" << std::endl;
         outFile.close();
     }
+
+    // Note: According to the original code, a path should be returned here, but since multiple paths are being probed, the return value needs to be adjusted based on subsequent logic
     std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
-    return paths[0].path;
+    return avaliablepath[0].path; // Temporarily return the path with the lowest fee; the specific return value should be adjusted based on requirements
+    // ------------------------- probing func. ---------------------------------------------
 }
 
 /***********************************************************************************************************************/
