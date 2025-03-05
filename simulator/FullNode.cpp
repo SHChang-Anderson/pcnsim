@@ -47,6 +47,7 @@ class FullNode : public cSimpleModule {
         virtual void commitSignedHandler (BaseMessage *baseMsg);
         virtual void revokeAndAckHandler (BaseMessage *baseMsg);
         virtual void capacityCheckHandler (BaseMessage *baseMsg);
+        virtual void capacityCheckResponse (BaseMessage *baseMsg);
 
         // HTLC senders
         virtual void sendFirstFulfillHTLC (HTLC *htlc, std::string firstHop);
@@ -267,6 +268,10 @@ void FullNode::handleMessage(cMessage *msg) {
             capacityCheckHandler(baseMsg);
             break;
         }
+        case 136: {
+            capacityCheckResponse(baseMsg);
+            break;
+        }
     }
 }
 
@@ -426,7 +431,6 @@ std::vector<std::string> FullNode::getpathFromTable(std::string input_source, st
     std::string current_source;
 
     std::ifstream infile("../routing_table/" + input_source);
-    std::vector<std::vector<std::string>> pathss;
 
     while (std::getline(infile, line)) {
         // If the line indicates the beginning of a new path set, extract the source and destination
@@ -493,7 +497,7 @@ std::vector<std::string> FullNode::getpathFromTable(std::string input_source, st
     }
 
     // Send probing messages for all available paths
-    for (const auto& pathData : avaliablepath) {
+    for (const auto& pathData : paths) {
         const std::vector<std::string>& path = pathData.path;
 
         // Check if the path is valid
@@ -534,16 +538,10 @@ std::vector<std::string> FullNode::getpathFromTable(std::string input_source, st
         send(newMessage, gate);
     }
     
-    if (avaliablepath.size() <= 0) {
-        std::ofstream outFile;
-        outFile.open("results/no_path.txt", std::ios::app);
-        outFile << " no path" << std::endl;
-        outFile.close();
-    }
-
+    
     // Note: According to the original code, a path should be returned here, but since multiple paths are being probed, the return value needs to be adjusted based on subsequent logic
     std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
-    return avaliablepath[0].path; // Temporarily return the path with the lowest fee; the specific return value should be adjusted based on requirements
+    return avaliablepath[0].path;; // Temporarily return the path with the lowest fee; the specific return value should be adjusted based on requirements
     // ------------------------- probing func. ---------------------------------------------
 }
 
@@ -668,19 +666,26 @@ void FullNode::capacityCheckHandler (BaseMessage *baseMsg) {
             EV << "Payment reached its destination. Not forwarding.\n";
             EV << "Cap" << baseMsg->getMinCapacity() << "\n";
 
-            // 開啟檔案以追加方式寫入
-            std::ofstream outFile("capacity_log.txt", std::ios::app);
-            if (outFile.is_open()) {
-                outFile << "Destination: " << dstName << "\n";
-                outFile << "Hops: ";
-                for (const auto& hop : baseMsg->getHops()) {
-                    outFile << hop << " ";
-                }
-                outFile << "\nMin Capacity: " << baseMsg->getMinCapacity() << "\n";
-                outFile << "-----------------------------\n";
-                outFile.close();
+            // Create response message
+            BaseMessage *responseMsg = new BaseMessage();
+            responseMsg->setDestination(sender.c_str()); // Set the destination to the original sender
+            responseMsg->setMessageType(136); // Assume 136 is CAPACITY_CHECK_RESPONSE
+            responseMsg->setHopCount(1); // Initialize hop count
+            // Set return path (reverse the original path)
+            std::vector<std::string> returnPath = path;
+            std::reverse(returnPath.begin(), returnPath.end());
+            responseMsg->setHops(returnPath);
+            responseMsg->setName("CAPACITY_CHECK_RESPONSE"); // Message name
+            responseMsg->setMinCapacity(baseMsg->getMinCapacity()); // Pass the minimum capacity
+
+            // Send response message
+            cGate *gate = _paymentChannels[returnPath[1]].getLocalGate(); // Assume the payment channel exists
+            if (gate) {
+                EV << "Sending CAPACITY_CHECK_RESPONSE to " << sender << "\n";
+                send(responseMsg, gate);
             } else {
-                EV << "Error: Unable to open file for logging.\n";
+                EV << "Error: No gate found for " << sender << "\n";
+                delete responseMsg; // Free memory if gate does not exist
             }
 
             if (!tryCommitTxOrFail(sender, false)) {
@@ -747,6 +752,148 @@ void FullNode::capacityCheckHandler (BaseMessage *baseMsg) {
 }
 // ------------------------------ capacityCheckHandler -----------------------------------------
 
+// ------------------------------ CAPACITY_CHECK_RESPONSE -----------------------------------------
+void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
+    EV << "CAPACITY_CHECK received at " + std::string(getName()) + " from " + std::string(baseMsg->getSenderModule()->getName()) + ".\n";
+    std::string myName = getName();
+
+   if (!baseMsg->isSelfMessage()) {
+        std::string dstName = baseMsg->getDestination();
+        std::vector<std::string> path = baseMsg->getHops();
+        std::string sender = baseMsg->getSenderModule()->getName();
+
+
+        if (dstName == this->getName()) {
+            EV << "Payment reached its destination. Not forwarding.\n";
+            EV << "Cap" << baseMsg->getMinCapacity() << "\n";
+
+            std::string lastElement = *path.rbegin();
+            // Construct the filename based on dstName (current node)
+            std::string filename = "../routing_table/" + lastElement;  // Extract number from "nodeX"
+
+            // Read the existing file content
+            std::ifstream inFile(filename);
+            std::vector<std::string> lines;
+            std::string line;
+            bool pathFound = false;
+            std::string pathStr;
+
+            // Construct the path string from sender to current node (reverse order)
+            pathStr = "";  // Initialize as empty string
+            for (auto it = path.rbegin(); it != path.rend(); ++it) {
+                if (!pathStr.empty()) {  // Add space before subsequent nodes
+                    pathStr += " ";
+                }
+                pathStr += *it;
+            }
+
+            if (inFile.is_open()) {
+                while (std::getline(inFile, line)) {
+                    lines.push_back(line);
+                    // Check if this line contains our path
+                    if (line.find("Path: " + pathStr) != std::string::npos) {
+                        pathFound = true;
+                        // Update the Flow value
+                        std::string newLine = line;
+                        size_t flowPos = line.find("Flow: ");
+                        if (flowPos != std::string::npos) {
+                            size_t commaPos = line.find(",", flowPos);
+                            if (commaPos != std::string::npos) {
+                                std::string flowStr = line.substr(flowPos + 6, commaPos - (flowPos + 6));
+                                double newFlow = baseMsg->getMinCapacity();
+                                if (newFlow < 0) newFlow = 0;  // Prevent negative flow
+                                char buffer[32];
+                                snprintf(buffer, sizeof(buffer), "%.2f", newFlow);
+                                newLine = line.substr(0, flowPos + 6) + buffer + line.substr(commaPos);
+                            }
+                        }
+                        lines.back() = newLine;  // Replace the last line with updated version
+                    }
+                }
+                inFile.close();
+            }
+
+            // Write updated content back to file
+            std::ofstream outFile(filename);
+            if (outFile.is_open()) {
+                for (const auto& l : lines) {
+                    outFile << l << "\n";
+                }
+                // If path wasn't found, append it (optional, depending on requirements)
+                if (!pathFound) {
+                    outFile << "Paths from " << dstName << " to " << sender << ":\n";
+                    outFile << "  Path: " << pathStr << ", Flow: " << baseMsg->getMinCapacity() 
+                            << ", Fee: 0.0\n";  // Fee set to 0.0 as default
+                }
+                outFile.close();
+            } else {
+                EV << "Error: Unable to open file " << filename << " for writing.\n";
+            }
+
+            if (!tryCommitTxOrFail(sender, false)) {
+                EV << "Setting timeout for node " + myName + "\n";
+                scheduleAt((simTime() + SimTime(500, SIMTIME_MS)), baseMsg);
+            }
+            return;
+        }
+
+        int nextHopIndex = baseMsg->getHopCount() + 1;
+        if (nextHopIndex >= path.size()) {
+            EV << "Error: nextHopIndex " << nextHopIndex << " out of bounds.\n";
+            return;
+        }
+
+        std::string nextHop = path[nextHopIndex];
+
+        if (_paymentChannels.find(nextHop) == _paymentChannels.end()) {
+            EV << "Error: Next hop " << nextHop << " not found in payment channels.\n";
+            return;
+        }
+
+        cGate *gate = _paymentChannels[nextHop].getLocalGate();
+        if (!gate) {
+            EV << "Error: Gate is nullptr for node " << myName << ". Message not sent.\n";
+            return;
+        }
+
+        EV << "Forward CAPACITY check \n";
+        BaseMessage *newMessage = new BaseMessage();
+        newMessage->setDestination(baseMsg->getDestination());
+        newMessage->setMessageType(136);
+        newMessage->setHopCount(baseMsg->getHopCount() + 1);
+        newMessage->setHops(baseMsg->getHops());
+        newMessage->setName("CAPACITY_CHECK");
+        newMessage->setMinCapacity(std::min(baseMsg->getMinCapacity(), _paymentChannels[nextHop].getCapacity()));
+
+        int hopIndex = newMessage->getHopCount();
+        if (hopIndex >= path.size()) {
+            EV << "Error: Hop index " << hopIndex << " out of bounds for path.\n";
+            delete newMessage;
+            return;
+        }
+
+        EV << "Sending message to " + path[hopIndex] + " for probing \n";
+        send(newMessage, gate);
+
+        if (!tryCommitTxOrFail(sender, false)) {
+            EV << "Setting timeout for node " + myName + ".\n";
+            scheduleAt((simTime() + SimTime(500, SIMTIME_MS)), baseMsg);
+        }
+
+    } else {
+        EV << myName + " timeout expired. Creating commit.\n";
+        std::vector<std::string> path = baseMsg->getHops();
+        int prevHopIndex = baseMsg->getHopCount() - 1;
+        if (prevHopIndex < 0) {
+            EV << "Error: prevHopIndex is negative.\n";
+            return;
+        }
+        std::string previousHop = path[prevHopIndex];
+        tryCommitTxOrFail(previousHop, true);
+    }
+}
+// ------------------------------ CAPACITY_CHECK_RESPONSE -----------------------------------------
+
 void FullNode::updateAddHTLCHandler (BaseMessage *baseMsg) {
 
 
@@ -766,13 +913,6 @@ void FullNode::updateAddHTLCHandler (BaseMessage *baseMsg) {
         int htlcType = UPDATE_ADD_HTLC;
         std::string htlcId = updateAddHTLCMsg->getHtlcId();
         double value = updateAddHTLCMsg->getValue();
-
-        if ((myName == "node2") && (sender == "node0"))
-        {
-            // Set breakpoint here
-            int x = 1;
-        }
-
 
         // Create new HTLC in the backward direction and set it as pending
         HTLC *htlcBackward = new HTLC(updateAddHTLCMsg);
@@ -1064,12 +1204,6 @@ void FullNode::paymentRefusedHandler (BaseMessage *baseMsg) {
     std::string paymentHash = paymentRefusedMsg->getPaymentHash();
     std::string errorReason = paymentRefusedMsg->getErrorReason();
     double value = paymentRefusedMsg->getValue();
-
-    if ((myName == "node0"))
-    {
-        // Set breakpoint here
-        int x = 1;
-    }
 
     // If it's a self message, we know we are waiting for an UPDATE_ADD_HTLC to be committed before sending
     if (baseMsg->isSelfMessage()) {
