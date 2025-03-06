@@ -429,45 +429,55 @@ std::vector<std::string> FullNode::getpathFromTable(std::string input_source, st
 
     std::string line;
     std::string current_source;
-
     std::ifstream infile("../routing_table/" + input_source);
 
+    bool readingPaths = false; 
+
     while (std::getline(infile, line)) {
-        // If the line indicates the beginning of a new path set, extract the source and destination
-        bool finish = 0;
-        if (line == "Paths from " + input_source +  " to " + input_destination + ":") {
-            finish = true;
-            while (std::getline(infile, line) && line.find("Paths from") == std::string::npos) {
-                FullNode::PathData tp;
-
-                // Extract node names using regular expression
-                std::regex re("node\\d+");
-                std::smatch match;
-
-                // Find all matches in the line
-                auto it = line.cbegin();
-                while (std::regex_search(it, line.cend(), match, re)) {
-                    tp.path.push_back(match.str());
-                    it = match[0].second;
-                }
-
-                // Extract flow and fee values using regular expressions
-                std::regex flow_re("Flow: ([0-9.]+)");
-                std::regex fee_re("Fee: ([0-9.]+)");
-
-                std::smatch flow_match, fee_match;
-
-                if (std::regex_search(line, flow_match, flow_re)) {
-                    tp.flow = std::stod(flow_match[1].str());
-                }
-                if (std::regex_search(line, fee_match, fee_re)) {
-                    tp.fee = std::stod(fee_match[1].str());
-                }
-                paths.push_back(tp);
-            }
+        // find the target line
+        if (line == "Paths from " + input_source + " to " + input_destination + ":") {
+            readingPaths = true;
+            continue;  // read next line for path flow
         }
-        if (finish)
+
+        // if read the next "Paths from ..." finish reading
+        if (readingPaths && line.find("Paths from") != std::string::npos) {
             break;
+        }
+
+        // read the path in the block
+        if (readingPaths) {
+            FullNode::PathData tp;
+
+            std::regex node_re("node\\d+");
+            std::smatch match;
+            auto it = line.cbegin();
+
+            while (std::regex_search(it, line.cend(), match, node_re)) {
+                tp.path.push_back(match.str());
+                it = match.suffix().first; 
+            }
+
+            // get flow and fee
+            std::regex flow_re("Flow: ([0-9.]+)");
+            std::regex fee_re("Fee: ([0-9.]+)");
+
+            std::smatch flow_match, fee_match;
+
+            if (std::regex_search(line, flow_match, flow_re)) {
+                tp.flow = std::stod(flow_match[1].str());  
+            } else {
+                tp.flow = 0.0;  
+            }
+
+            if (std::regex_search(line, fee_match, fee_re)) {
+                tp.fee = std::stod(fee_match[1].str()); 
+            } else {
+                tp.fee = 0.0;
+            }
+
+            paths.push_back(tp);
+        }
     }
 
     infile.close();
@@ -485,17 +495,7 @@ std::vector<std::string> FullNode::getpathFromTable(std::string input_source, st
 
     // ------------------------- probing func. ---------------------------------------------
     EV << "Creating probing msg for all available paths \n";
-
-    // Check if there are any available paths
-    if (avaliablepath.empty()) {
-        EV << "No available paths with sufficient flow!" << endl;
-        std::ofstream outFile;
-        outFile.open("results/no_path.txt", std::ios::app);
-        outFile << " no path" << std::endl;
-        outFile.close();
-        return paths[0].path; // If no available paths, return the first path (based on original logic)
-    }
-
+    
     // Send probing messages for all available paths
     for (const auto& pathData : paths) {
         const std::vector<std::string>& path = pathData.path;
@@ -538,10 +538,23 @@ std::vector<std::string> FullNode::getpathFromTable(std::string input_source, st
         send(newMessage, gate);
     }
     
+    // Check if there are any available paths
+    if (avaliablepath.empty()) {
+        EV << "No available paths with sufficient flow!" << endl;
+        std::ofstream outFile;
+        outFile.open("results/no_path.txt", std::ios::app);
+        outFile << " no path from " << paths[0].path.front() << " to " << paths[0].path.back() << ": " << paths[0].flow <<  std::endl;
+        for (auto it = paths[0].path.begin(); it != paths[0].path.end(); ++it) {
+            outFile << *it << " ";
+        }
+        outFile << "\n";
+        outFile.close();
+        return paths[0].path; // If no available paths, return the first path (based on original logic)
+    }
     
     // Note: According to the original code, a path should be returned here, but since multiple paths are being probed, the return value needs to be adjusted based on subsequent logic
     std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
-    return avaliablepath[0].path;; // Temporarily return the path with the lowest fee; the specific return value should be adjusted based on requirements
+    return paths[0].path;; // Temporarily return the path with the lowest fee; the specific return value should be adjusted based on requirements
     // ------------------------- probing func. ---------------------------------------------
 }
 
@@ -757,7 +770,7 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
     EV << "CAPACITY_CHECK received at " + std::string(getName()) + " from " + std::string(baseMsg->getSenderModule()->getName()) + ".\n";
     std::string myName = getName();
 
-   if (!baseMsg->isSelfMessage()) {
+    if (!baseMsg->isSelfMessage()) {
         std::string dstName = baseMsg->getDestination();
         std::vector<std::string> path = baseMsg->getHops();
         std::string sender = baseMsg->getSenderModule()->getName();
@@ -801,7 +814,6 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
                             if (commaPos != std::string::npos) {
                                 std::string flowStr = line.substr(flowPos + 6, commaPos - (flowPos + 6));
                                 double newFlow = baseMsg->getMinCapacity();
-                                if (newFlow < 0) newFlow = 0;  // Prevent negative flow
                                 char buffer[32];
                                 snprintf(buffer, sizeof(buffer), "%.2f", newFlow);
                                 newLine = line.substr(0, flowPos + 6) + buffer + line.substr(commaPos);
@@ -855,6 +867,74 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
             EV << "Error: Gate is nullptr for node " << myName << ". Message not sent.\n";
             return;
         }
+
+        std::string lastElement = myName;
+        // Construct the filename based on dstName (current node)
+        std::string filename = "../routing_table/" + lastElement;  // Extract number from "nodeX"
+
+        // Read the existing file content
+        std::ifstream inFile(filename);
+        std::vector<std::string> lines;
+        std::string line;
+        bool pathFound = false;
+        std::string pathStr;
+
+        // Construct the path string from sender to current node (reverse order)
+        pathStr = "";  // Initialize as empty string
+        bool stread = false;
+
+        for (auto it = path.rbegin(); it != path.rend(); ++it) {
+            if (*it == myName)
+                stread = true;
+            if (stread) {
+                if (!pathStr.empty()) {  // Add space before subsequent nodes
+                    pathStr += " ";
+                }
+                pathStr += *it;
+            }
+        }
+
+        if (inFile.is_open()) {
+            while (std::getline(inFile, line)) {
+                lines.push_back(line);
+                // Check if this line contains our path
+                if (line.find("Path: " + pathStr) != std::string::npos) {
+                    pathFound = true;
+                    // Update the Flow value
+                    std::string newLine = line;
+                    size_t flowPos = line.find("Flow: ");
+                    if (flowPos != std::string::npos) {
+                        size_t commaPos = line.find(",", flowPos);
+                        if (commaPos != std::string::npos) {
+                            std::string flowStr = line.substr(flowPos + 6, commaPos - (flowPos + 6));
+                            double newFlow = baseMsg->getMinCapacity();
+                            char buffer[32];
+                            snprintf(buffer, sizeof(buffer), "%.2f", newFlow);
+                            newLine = line.substr(0, flowPos + 6) + buffer + line.substr(commaPos);
+                        }
+                    }
+                    lines.back() = newLine;  // Replace the last line with updated version
+                }
+            }
+            inFile.close();
+        }
+
+        // Write updated content back to file
+        std::ofstream outFile(filename);
+        if (outFile.is_open()) {
+            for (const auto& l : lines) {
+                outFile << l << "\n";
+            }
+            // If path wasn't found, append it (optional, depending on requirements)
+            if (!pathFound) {
+                outFile << "Paths from " << dstName << " to " << sender << ":\n";
+                outFile << "  Path: " << pathStr << ", Flow: " << baseMsg->getMinCapacity() 
+                        << ", Fee: 0.0\n";  // Fee set to 0.0 as default
+            }
+            outFile.close();
+        } else {
+            EV << "Error: Unable to open file " << filename << " for writing.\n";
+        }        
 
         EV << "Forward CAPACITY check \n";
         BaseMessage *newMessage = new BaseMessage();

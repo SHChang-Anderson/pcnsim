@@ -108,7 +108,7 @@ def initialize_attributes(graph, lightning, multigraph):
 
 def get_end_hosts_list(graph, complete):
     end_hosts = []
-    if (complete == False):
+    if (complete == True):
         for node in graph.nodes():
             if (graph.degree(node) == 1):
                 end_hosts.append(node)
