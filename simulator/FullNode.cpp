@@ -4,6 +4,7 @@
 #include <string>
 #include <algorithm>
 #include <regex>
+#include <filesystem>
 #include "globals.h"
 #include "crypto.h"
 #include "baseMessage_m.h"
@@ -112,6 +113,18 @@ Define_Module(FullNode);
 /***********************************************************************************************************************/
 
 void FullNode::initialize() {
+
+    const std::string logTableDir = "../log_table";
+
+    // Check if log_table directory exists, if not create it
+    if (!std::filesystem::exists(logTableDir)) {
+        std::filesystem::create_directory(logTableDir);
+    }
+
+    // Remove all files in log_table directory
+    for (const auto& entry : std::filesystem::directory_iterator(logTableDir)) {
+        std::filesystem::remove_all(entry.path());
+    }
 
     const std::string filename = "results/payment_result.txt";
 
@@ -492,7 +505,7 @@ std::vector<std::string> FullNode::getpathFromTable(std::string input_source, st
             break;
         avaliablepath.push_back(paths[i]);
     }
-
+    
     // ------------------------- probing func. ---------------------------------------------
     EV << "Creating probing msg for all available paths \n";
     
@@ -537,7 +550,7 @@ std::vector<std::string> FullNode::getpathFromTable(std::string input_source, st
         EV << "\n";
         send(newMessage, gate);
     }
-    
+
     // Check if there are any available paths
     if (avaliablepath.empty()) {
         EV << "No available paths with sufficient flow!" << endl;
@@ -552,9 +565,68 @@ std::vector<std::string> FullNode::getpathFromTable(std::string input_source, st
         return paths[0].path; // If no available paths, return the first path (based on original logic)
     }
     
+   // Check log_table for additional paths
+   for (const auto& pathData : paths) {
+
+        std::string logTableFilename = "../log_table/" + pathData.path[0];
+        std::ifstream logTableFile(logTableFilename);
+        if (logTableFile.is_open()) {
+            std::vector<std::string> logLines;
+            while (std::getline(logTableFile, line)) {
+                logLines.push_back(line);
+            }
+            logTableFile.close();
+            
+            int fd = 0;
+
+            // Iterate from the end of the file to the beginning
+            for (auto it = logLines.rbegin(); it != logLines.rend(); ++it) {
+                FullNode::PathData tp;
+
+                std::regex node_re("node\\d+");
+                std::smatch match;
+                auto lineIt = it->cbegin();
+
+                while (std::regex_search(lineIt, it->cend(), match, node_re)) {
+                    tp.path.push_back(match.str());
+                    lineIt = match.suffix().first; 
+                }
+
+                // get flow and fee
+                std::regex flow_re("Flow: ([0-9.]+)");
+                std::regex fee_re("Fee: ([0-9.]+)");
+
+                std::smatch flow_match, fee_match;
+
+                if (std::regex_search(*it, flow_match, flow_re)) {
+                    tp.flow = std::stod(flow_match[1].str());  
+                } else {
+                    continue; // Skip this line if no flow is found
+                }
+
+                // Check if the path matches the current pathData.path
+                if (tp.path == pathData.path) {
+                    if (tp.flow >= value) {
+                        return tp.path; // Stop searching if a valid path is found
+                    } else {
+                        fd = 1;
+                        break; // Stop searching if a path is found but the flow is insufficient
+                    }
+                } 
+            }
+            if (fd) {
+                continue; // Skip the current pathData if a path is found but the flow is insufficient
+            } else {
+                return pathData.path; // Return the current pathData if no path is found in the log table
+            }
+        } else {
+            return pathData.path; // Return the current pathData if the log table file is not found
+        }
+    }
+
     // Note: According to the original code, a path should be returned here, but since multiple paths are being probed, the return value needs to be adjusted based on subsequent logic
     std::sort(avaliablepath.begin(), avaliablepath.end(), FullNode::compareByFee);
-    return paths[0].path;; // Temporarily return the path with the lowest fee; the specific return value should be adjusted based on requirements
+    return paths[0].path; // Temporarily return the path with the lowest fee; the specific return value should be adjusted based on requirements
     // ------------------------- probing func. ---------------------------------------------
 }
 
@@ -782,7 +854,7 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
 
             std::string lastElement = *path.rbegin();
             // Construct the filename based on dstName (current node)
-            std::string filename = "../routing_table/" + lastElement;  // Extract number from "nodeX"
+            std::string filename = "../log_table/" + lastElement;  // Extract number from "nodeX"
 
             // Read the existing file content
             std::ifstream inFile(filename);
@@ -824,7 +896,7 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
                 }
                 inFile.close();
             }
-
+            
             // Write updated content back to file
             std::ofstream outFile(filename);
             if (outFile.is_open()) {
@@ -833,7 +905,6 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
                 }
                 // If path wasn't found, append it (optional, depending on requirements)
                 if (!pathFound) {
-                    outFile << "Paths from " << dstName << " to " << sender << ":\n";
                     outFile << "  Path: " << pathStr << ", Flow: " << baseMsg->getMinCapacity() 
                             << ", Fee: 0.0\n";  // Fee set to 0.0 as default
                 }
@@ -841,11 +912,7 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
             } else {
                 EV << "Error: Unable to open file " << filename << " for writing.\n";
             }
-
-            if (!tryCommitTxOrFail(sender, false)) {
-                EV << "Setting timeout for node " + myName + "\n";
-                scheduleAt((simTime() + SimTime(500, SIMTIME_MS)), baseMsg);
-            }
+            
             return;
         }
 
@@ -867,10 +934,10 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
             EV << "Error: Gate is nullptr for node " << myName << ". Message not sent.\n";
             return;
         }
-
+        /*
         std::string lastElement = myName;
         // Construct the filename based on dstName (current node)
-        std::string filename = "../routing_table/" + lastElement;  // Extract number from "nodeX"
+        std::string filename = "../log_table/" + lastElement;  // Extract number from "nodeX"
 
         // Read the existing file content
         std::ifstream inFile(filename);
@@ -918,7 +985,7 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
             }
             inFile.close();
         }
-
+        
         // Write updated content back to file
         std::ofstream outFile(filename);
         if (outFile.is_open()) {
@@ -927,15 +994,14 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
             }
             // If path wasn't found, append it (optional, depending on requirements)
             if (!pathFound) {
-                outFile << "Paths from " << dstName << " to " << sender << ":\n";
                 outFile << "  Path: " << pathStr << ", Flow: " << baseMsg->getMinCapacity() 
                         << ", Fee: 0.0\n";  // Fee set to 0.0 as default
             }
             outFile.close();
         } else {
             EV << "Error: Unable to open file " << filename << " for writing.\n";
-        }        
-
+        }
+        */
         EV << "Forward CAPACITY check \n";
         BaseMessage *newMessage = new BaseMessage();
         newMessage->setDestination(baseMsg->getDestination());
@@ -955,10 +1021,6 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
         EV << "Sending message to " + path[hopIndex] + " for probing \n";
         send(newMessage, gate);
 
-        if (!tryCommitTxOrFail(sender, false)) {
-            EV << "Setting timeout for node " + myName + ".\n";
-            scheduleAt((simTime() + SimTime(500, SIMTIME_MS)), baseMsg);
-        }
 
     } else {
         EV << myName + " timeout expired. Creating commit.\n";
@@ -968,8 +1030,6 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
             EV << "Error: prevHopIndex is negative.\n";
             return;
         }
-        std::string previousHop = path[prevHopIndex];
-        tryCommitTxOrFail(previousHop, true);
     }
 }
 // ------------------------------ CAPACITY_CHECK_RESPONSE -----------------------------------------
