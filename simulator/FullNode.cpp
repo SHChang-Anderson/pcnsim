@@ -67,6 +67,7 @@ class FullNode : public cSimpleModule {
         // Util functions
         virtual bool tryUpdatePaymentChannel (std::string nodeName, double value, bool increase);
         virtual bool hasCapacityToForward (std::string nodeName, double value);
+        virtual double getCapacityT (std::string nodeName);
         virtual bool tryCommitTxOrFail (std::string, bool);
         virtual Invoice* generateInvoice (std::string srcName, double value);
         virtual void setInFlight (HTLC *htlc, std::string nextHop);
@@ -806,7 +807,7 @@ void FullNode::capacityCheckHandler (BaseMessage *baseMsg) {
         newMessage->setHopCount(baseMsg->getHopCount() + 1);
         newMessage->setHops(baseMsg->getHops());
         newMessage->setName("CAPACITY_CHECK");
-        newMessage->setMinCapacity(std::min(baseMsg->getMinCapacity(), _paymentChannels[nextHop].getCapacity()));
+        newMessage->setMinCapacity(std::min(baseMsg->getMinCapacity(), getCapacityT(nextHop)));
 
         int hopIndex = newMessage->getHopCount();
         if (hopIndex >= path.size()) {
@@ -1009,7 +1010,7 @@ void FullNode::capacityCheckResponse (BaseMessage *baseMsg) {
         newMessage->setHopCount(baseMsg->getHopCount() + 1);
         newMessage->setHops(baseMsg->getHops());
         newMessage->setName("CAPACITY_CHECK");
-        newMessage->setMinCapacity(std::min(baseMsg->getMinCapacity(), _paymentChannels[nextHop].getCapacity()));
+        newMessage->setMinCapacity(std::min(baseMsg->getMinCapacity(), getCapacityT(nextHop)));
 
         int hopIndex = newMessage->getHopCount();
         if (hopIndex >= path.size()) {
@@ -1065,6 +1066,11 @@ void FullNode::updateAddHTLCHandler (BaseMessage *baseMsg) {
         // If I'm the destination, trigger commit immediately and return
         if (dstName == this->getName()){
             EV << "Payment reached its destination. Not forwarding.\n";
+            
+            std::ofstream outFile;
+            outFile.open("results/payment_result.txt", std::ios::app);
+            outFile << value << " COMPLETED" << std::endl;
+            outFile.close();
 
             // Store base message for retrieving path on the first fulfill message later
             _myStoredMessages[paymentHash] = baseMsg;
@@ -1085,6 +1091,12 @@ void FullNode::updateAddHTLCHandler (BaseMessage *baseMsg) {
         if (!hasCapacityToForward(nextHop, value)) {
             // Not enough capacity to forward payment. Remove pending HTLCs and send a PAYMENT_REFUSED
             // message to the previous hop.
+
+            std::ofstream outFile;
+            outFile.open("results/payment_result.txt", std::ios::app);
+            outFile << value << " FAILED" << std::endl;
+            outFile.close();
+
             _paymentChannels[sender].removePendingHTLC(htlcId);
             _paymentChannels[sender].removeLastPendingHTLCFIFO();
             _paymentChannels[sender].removePreviousHopUp(htlcId);
@@ -1727,10 +1739,6 @@ void FullNode::commitUpdateFulfillHTLC (HTLC *htlc, std::string neighbor) {
             bubble("Payment completed!");
             EV << "Payment " + paymentHash + " completed!\n";
 
-            std::ofstream outFile;
-            outFile.open("results/payment_result.txt", std::ios::app);
-            outFile << value << " COMPLETED" << std::endl;
-            outFile.close();
             
             _myPayments[paymentHash] = "COMPLETED";
             _countCompleted++;
@@ -1777,11 +1785,6 @@ void FullNode::commitUpdateFailHTLC (HTLC *htlc, std::string neighbor) {
             bubble("Payment failed!");
             EV << "Payment " + paymentHash + " failed!\n";
             _myPayments[paymentHash] = "FAILED";
-
-            std::ofstream outFile;
-            outFile.open("results/payment_result.txt", std::ios::app);
-            outFile << value << " FAILED" << std::endl;
-            outFile.close();
 
             _countFailed++;
             _paymentGoodputSent = double(_countCompleted)/double(_countCompleted + _countFailed);
@@ -1908,6 +1911,39 @@ bool FullNode::hasCapacityToForward  (std::string nodeName, double value) {
         return false;
     else
         return true;
+}
+
+double FullNode::getCapacityT  (std::string nodeName) {
+    // Helper function that calculates the payment channel capacity after applying the pending HTLCs and checks if the node has sufficient funds to forward a payment.
+
+    std::deque< HTLC*> pendingHTLCsFIFO = _paymentChannels[nodeName].getPendingHTLCsFIFO();
+    std::string myName = getName();
+
+    // Calculate the capacity after applying pending HTLCs
+    double capacity = _paymentChannels[nodeName].getCapacity();
+    for (const auto & htlc : pendingHTLCsFIFO) {
+        std::string htlcId  = htlc->getHtlcId();
+        int htlcType = htlc->getType();
+
+        // If it's an add update, subtract value from capacity if we are the previous hop uptstream
+        // (because we'll have less money when we commmit it)
+        if (htlcType == UPDATE_ADD_HTLC) {
+            if (_paymentChannels[nodeName].getPreviousHopUp(htlcId) == myName) {
+                capacity -= htlc->getValue();
+                if (capacity <= 0)
+                    return false;
+            }
+        } else if (htlcType == UPDATE_FAIL_HTLC) {
+            // If it's a fail update, add value to capacity if we are not the previous hop downstream
+            // (because we'll recover money when we commmit it)
+            if (_paymentChannels[nodeName].getPreviousHopDown(htlcId) == nodeName) {
+                capacity += htlc->getValue();
+            }
+        } else {}; // If it's a fulfill update, do nothing (fulfills don't change the capacity in the upstream direction)
+    }
+
+    // Check if the capacity would become negative after forwarding the next payment
+    return capacity;
 }
 
 bool FullNode::tryCommitTxOrFail(std::string sender, bool timeoutFlag) {
